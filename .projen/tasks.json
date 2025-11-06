@@ -110,6 +110,14 @@
         }
       ]
     },
+    "deploy:dev": {
+      "name": "deploy:dev",
+      "steps": [
+        {
+          "exec": "STAGE=dev cdk deploy 'dev/*'"
+        }
+      ]
+    },
     "destroy": {
       "name": "destroy",
       "description": "Destroys your cdk app in the AWS cloud",
@@ -120,12 +128,28 @@
         }
       ]
     },
+    "destroy:dev": {
+      "name": "destroy:dev",
+      "steps": [
+        {
+          "exec": "STAGE=dev cdk destroy 'dev/*'"
+        }
+      ]
+    },
     "diff": {
       "name": "diff",
       "description": "Diffs the currently deployed app against your code",
       "steps": [
         {
           "exec": "cdk diff"
+        }
+      ]
+    },
+    "diff:dev": {
+      "name": "diff:dev",
+      "steps": [
+        {
+          "exec": "cdk diff 'prod/*'"
         }
       ]
     },
@@ -203,6 +227,14 @@
         }
       ]
     },
+    "synth:dev": {
+      "name": "synth:dev",
+      "steps": [
+        {
+          "exec": "STAGE=dev cdk synth"
+        }
+      ]
+    },
     "synth:silent": {
       "name": "synth:silent",
       "description": "Synthesizes your cdk app into cdk.out and suppresses the template in stdout (part of \"yarn build\")",
@@ -217,20 +249,7 @@
       "description": "Run tests",
       "steps": [
         {
-          "exec": "jest --passWithNoTests --updateSnapshot",
-          "receiveArgs": true
-        },
-        {
           "spawn": "eslint"
-        }
-      ]
-    },
-    "test:watch": {
-      "name": "test:watch",
-      "description": "Run jest in watch mode",
-      "steps": [
-        {
-          "exec": "jest --watch"
         }
       ]
     },
@@ -242,13 +261,13 @@
       },
       "steps": [
         {
-          "exec": "pnpm dlx npm-check-updates@16 --upgrade --target=minor --peer --no-deprecated --dep=dev,peer,prod,optional --filter=@types/aws-lambda,@types/jest,@types/node,esbuild,eslint-import-resolver-typescript,eslint-plugin-import,jest,projen,ts-jest,ts-node,typescript,@aws-sdk/client-dynamodb,@aws-sdk/client-ecr,@aws-sdk/client-ecs,@aws-sdk/client-s3,@aws-sdk/client-sagemaker-a2i-runtime,@aws-sdk/client-sfn"
+          "exec": "pnpm dlx npm-check-updates@16 --upgrade --target=minor --peer --no-deprecated --dep=dev,peer,prod,optional --filter=@types/aws-lambda,@types/node,esbuild,eslint-import-resolver-typescript,eslint-plugin-import,projen,ts-jest,ts-node,typescript,@aws-sdk/client-dynamodb,@aws-sdk/client-ecr,@aws-sdk/client-ecs,@aws-sdk/client-lambda,@aws-sdk/client-s3,@aws-sdk/client-sagemaker-a2i-runtime,@aws-sdk/client-sfn,@aws-sdk/lib-dynamodb,@aws-sdk/s3-request-presigner,@aws-sdk/util-dynamodb,aws-sdk,cdk-nag,dotenv"
         },
         {
           "exec": "pnpm i --no-frozen-lockfile"
         },
         {
-          "exec": "pnpm update @stylistic/eslint-plugin @types/aws-lambda @types/jest @types/node @typescript-eslint/eslint-plugin @typescript-eslint/parser aws-cdk esbuild eslint-import-resolver-typescript eslint-plugin-import eslint jest jest-junit projen ts-jest ts-node typescript @aws-sdk/client-dynamodb @aws-sdk/client-ecr @aws-sdk/client-ecs @aws-sdk/client-s3 @aws-sdk/client-sagemaker-a2i-runtime @aws-sdk/client-sfn aws-cdk-lib constructs"
+          "exec": "pnpm update @stylistic/eslint-plugin @types/aws-lambda @types/node @typescript-eslint/eslint-plugin @typescript-eslint/parser aws-cdk esbuild eslint-import-resolver-typescript eslint-plugin-import eslint projen ts-jest ts-node typescript @aws-sdk/client-dynamodb @aws-sdk/client-ecr @aws-sdk/client-ecs @aws-sdk/client-lambda @aws-sdk/client-s3 @aws-sdk/client-sagemaker-a2i-runtime @aws-sdk/client-sfn @aws-sdk/lib-dynamodb @aws-sdk/s3-request-presigner @aws-sdk/util-dynamodb aws-cdk-lib aws-sdk cdk-nag constructs dotenv"
         },
         {
           "exec": "npx projen"

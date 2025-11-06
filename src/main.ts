@@ -1,23 +1,40 @@
-import { App, Stack, StackProps } from 'aws-cdk-lib';
-import { Construct } from 'constructs';
+#!/usr/bin/env node
+import * as cdk from 'aws-cdk-lib';
+import { config } from 'dotenv';
 
-export class MyStack extends Stack {
-  constructor(scope: Construct, id: string, props: StackProps = {}) {
-    super(scope, id, props);
+config();
 
-    // define resources here...
-  }
-}
+import { DevStage } from './lib/stages';
+import { STAGES } from './shared/constants';
 
-// for development, use account/region from cdk cli
-const devEnv = {
-  account: process.env.CDK_DEFAULT_ACCOUNT,
-  region: process.env.CDK_DEFAULT_REGION,
+// Environment variables with defaults for marketplace deployment
+const CDK_DEFAULT_REGION = process.env.CDK_DEFAULT_REGION || 'us-east-1';
+const CDK_DEFAULT_ACCOUNT = process.env.CDK_DEFAULT_ACCOUNT || '';
+
+const app = new cdk.App();
+
+const props = {
+  env: {
+    region: CDK_DEFAULT_REGION,
+    account: CDK_DEFAULT_ACCOUNT,
+  },
 };
 
-const app = new App();
+// Deploy the marketplace stage
+new DevStage(
+  app,
+  STAGES.dev,
+  props,
+  {
+    env: { region: CDK_DEFAULT_REGION, account: CDK_DEFAULT_ACCOUNT },
+  },
+);
 
-new MyStack(app, 'deepseekocr-dev', { env: devEnv });
-// new MyStack(app, 'deepseekocr-prod', { env: prodEnv });
 
+// Synthesize the CloudFormation templates
 app.synth();
+
+// Log deployment information
+console.log('🚀 Marketplace CloudFormation Template Generation Complete!');
+console.log('🌍 Region:', CDK_DEFAULT_REGION);
+console.log('📁 Output Directory: cdk.out/');

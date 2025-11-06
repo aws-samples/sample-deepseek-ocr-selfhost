@@ -1,40 +1,52 @@
 #!/usr/bin/env python3
 """
-FastAPI server for DeepSeek OCR processing
-Based on the Bogdanovich77 implementation with enhancements for AWS deployment
+DeepSeek-OCR vLLM Server
+FastAPI wrapper for DeepSeek-OCR with vLLM backend
 """
 
 import os
 import sys
-import json
+import asyncio
+import io
 import tempfile
-import traceback
 from typing import List, Optional
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
+from typing import Optional
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-import PyMuPDF  # fitz
+from pydantic import BaseModel
+import torch
+import fitz  # PyMuPDF
 from PIL import Image
-import io
+from tqdm import tqdm
 
-# Add DeepSeek-OCR to Python path
-sys.path.insert(0, '/app/DeepSeek-OCR')
+# Add current directory to Python path
+sys.path.insert(0, '/app/DeepSeek-OCR-vllm')
 
-# Import DeepSeek OCR modules
-try:
-    from config import MODEL_PATH, PROMPT
-    from process.image_process import DeepseekOCRProcessor
-except ImportError as e:
-    print(f"Failed to import DeepSeek-OCR modules: {e}")
-    sys.exit(1)
+# Set environment variables for vLLM compatibility
+if torch.version.cuda == '11.8':
+    os.environ["TRITON_PTXAS_PATH"] = "/usr/local/cuda-11.8/bin/ptxas"
+os.environ['VLLM_USE_V1'] = '0'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+
+# Import DeepSeek-OCR components
+from config import INPUT_PATH, OUTPUT_PATH, PROMPT, CROP_MODE, MAX_CONCURRENCY, NUM_WORKERS
+MODEL_PATH = os.environ.get('MODEL_PATH', 'deepseek-ai/DeepSeek-OCR')
+from deepseek_ocr import DeepseekOCRForCausalLM
+from process.image_process import DeepseekOCRProcessor
+from vllm import LLM, SamplingParams
+from vllm.model_executor.models.registry import ModelRegistry
+
+# Register the custom model
+ModelRegistry.register_model("DeepseekOCRForCausalLM", DeepseekOCRForCausalLM)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="DeepSeek OCR API",
-    description="PDF and Image OCR processing with DeepSeek-OCR",
+    title="DeepSeek-OCR API",
+    description="High-performance OCR service using DeepSeek-OCR with vLLM",
     version="1.0.0"
 )
 
@@ -47,221 +59,280 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global OCR processor instance
-ocr_processor = None
+# Global variables for the model
+llm = None
+sampling_params = None
 
-def initialize_ocr():
-    """Initialize the OCR processor"""
-    global ocr_processor
-    try:
-        print(f"Initializing DeepSeek OCR with model path: {MODEL_PATH}")
-        ocr_processor = DeepseekOCRProcessor()
-        print("DeepSeek OCR initialized successfully")
-        return True
-    except Exception as e:
-        print(f"Failed to initialize OCR processor: {e}")
-        traceback.print_exc()
-        return False
+class OCRResponse(BaseModel):
+    success: bool
+    result: Optional[str] = None
+    error: Optional[str] = None
+    page_count: Optional[int] = None
 
-def pdf_to_images(pdf_bytes: bytes, dpi: int = 144) -> List[Image.Image]:
-    """Convert PDF to images"""
-    images = []
-    try:
-        pdf_doc = PyMuPDF.open(stream=pdf_bytes, filetype="pdf")
+class BatchOCRResponse(BaseModel):
+    success: bool
+    results: List[OCRResponse]
+    total_pages: int
+    filename: str
+
+def initialize_model():
+    """Initialize the vLLM model"""
+    global llm, sampling_params
+    
+    if llm is None:
+        print("Initializing DeepSeek-OCR model...")
         
-        for page_num in range(len(pdf_doc)):
-            page = pdf_doc.load_page(page_num)
-            mat = PyMuPDF.Matrix(dpi/72, dpi/72)  # Scale factor for DPI
-            pix = page.get_pixmap(matrix=mat)
-            img_data = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_data))
-            images.append(image)
+        # Initialize vLLM engine
+        llm = LLM(
+            model=MODEL_PATH,
+            hf_overrides={"architectures": ["DeepseekOCRForCausalLM"]},
+            block_size=256,
+            enforce_eager=False,
+            trust_remote_code=True,
+            max_model_len=8192,
+            swap_space=0,
+            max_num_seqs=MAX_CONCURRENCY,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            disable_mm_preprocessor_cache=True
+        )
+        
+        # Set up sampling parameters
+        from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
+        logits_processors = [NoRepeatNGramLogitsProcessor(ngram_size=20, window_size=50, whitelist_token_ids={128821, 128822})]
+        
+        sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=8192,
+            logits_processors=logits_processors,
+            skip_special_tokens=False,
+            include_stop_str_in_output=True,
+        )
+        
+        print("Model initialization complete!")
+
+def pdf_to_images_high_quality(pdf_data: bytes, dpi: int = 144) -> List[Image.Image]:
+    """Convert PDF bytes to high-quality PIL Images"""
+    images = []
+    
+    # Save PDF data to temporary file
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+        temp_pdf.write(pdf_data)
+        temp_pdf_path = temp_pdf.name
+    
+    try:
+        pdf_document = fitz.open(temp_pdf_path)
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
             
-        pdf_doc.close()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to process PDF: {str(e)}")
+            # Convert to PIL Image
+            img_data = pixmap.tobytes("png")
+            img = Image.open(io.BytesIO(img_data))
+            images.append(img)
+        
+        pdf_document.close()
+    finally:
+        # Clean up temporary file
+        os.unlink(temp_pdf_path)
     
     return images
 
-def process_image_ocr(image: Image.Image, custom_prompt: Optional[str] = None) -> dict:
-    """Process single image with OCR"""
-    try:
-        # Use custom prompt if provided, otherwise use default
-        prompt = custom_prompt or PROMPT
-        
-        # Convert PIL Image to format expected by DeepSeek OCR
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-            image.save(tmp_file.name, 'PNG')
-            
-            # Process with DeepSeek OCR
-            result = ocr_processor.process_image(tmp_file.name, prompt)
-            
-            # Clean up temporary file
-            os.unlink(tmp_file.name)
-            
-            return {
-                "success": True,
-                "result": result,
-                "page_count": 1
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "page_count": 0
+def process_single_image(image: Image.Image, prompt: str = PROMPT) -> str:
+    """Process a single image with DeepSeek-OCR using the specified prompt"""
+    print(f"[DEBUG] process_single_image called with prompt: {repr(prompt)}")
+    print(f"[DEBUG] Prompt length: {len(prompt)} characters")
+    print(f"[DEBUG] Prompt starts with <image>: {prompt.startswith('<image>')}")
+    
+    # Create request format for vLLM
+    request_item = {
+        "prompt": prompt,
+        "multi_modal_data": {
+            "image": DeepseekOCRProcessor().tokenize_with_images(
+                prompt=prompt,
+                images=[image],
+                bos=True,
+                eos=True,
+                cropping=CROP_MODE
+            )
         }
+    }
+    
+    print(f"[DEBUG] Request item prompt: {repr(request_item['prompt'])}")
+    print(f"[DEBUG] Request item keys: {list(request_item.keys())}")
+    print(f"[DEBUG] Multi-modal data type: {type(request_item['multi_modal_data'])}")
+    
+    # Generate with vLLM
+    print(f"[DEBUG] Sending request to vLLM...")
+    outputs = llm.generate([request_item], sampling_params=sampling_params)
+    result = outputs[0].outputs[0].text
+    
+    print(f"[DEBUG] Model output (first 100 chars): {repr(result[:100])}")
+    print(f"[DEBUG] Model output length: {len(result)} characters")
+    
+    # Clean up result
+    if '<｜end▁of▁sentence｜>' in result:
+        result = result.replace('<｜end▁of▁sentence｜>', '')
+        print(f"[DEBUG] Removed end-of-sentence tokens")
+    
+    return result
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the model on startup"""
+    initialize_model()
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {"message": "DeepSeek-OCR API is running", "status": "healthy"}
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Detailed health check"""
     return {
         "status": "healthy",
-        "model_loaded": ocr_processor is not None,
+        "model_loaded": llm is not None,
         "model_path": MODEL_PATH,
-        "cuda_available": True,  # Assuming CUDA is available in Docker
-        "cuda_device_count": 1
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
     }
 
-@app.post("/ocr/image")
-async def process_image(
-    file: UploadFile = File(...),
-    prompt: Optional[str] = Form(None)
-):
-    """Process single image file"""
-    if ocr_processor is None:
-        raise HTTPException(status_code=503, detail="OCR service not initialized")
-    
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
+@app.post("/ocr/image", response_model=OCRResponse)
+async def process_image_endpoint(file: UploadFile = File(...), prompt: Optional[str] = Form(None)):
+    """Process a single image file with optional custom prompt"""
     try:
-        # Read and process image
-        image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes))
+        print(f"[DEBUG] Image endpoint called for file: {file.filename}")
         
-        # Process with OCR
-        result = process_image_ocr(image, prompt)
+        # Read image data
+        image_data = await file.read()
+        print(f"[DEBUG] Read {len(image_data)} bytes of image data")
         
-        return JSONResponse(content=result)
+        # Convert to PIL Image
+        image = Image.open(io.BytesIO(image_data)).convert('RGB')
+        print(f"[DEBUG] Converted to PIL Image, size: {image.size}")
+        
+        # Debug logging
+        print(f"[DEBUG] Received prompt parameter: {repr(prompt)}")
+        print(f"[DEBUG] Default PROMPT from config: {repr(PROMPT)}")
+        
+        # Use provided prompt or default
+        use_prompt = prompt if prompt else PROMPT
+        print(f"[DEBUG] Image endpoint selected prompt: {repr(use_prompt)}")
+        print(f"[DEBUG] Using custom prompt: {prompt is not None}")
+        
+        # Process with DeepSeek-OCR
+        print(f"[DEBUG] Sending image to DeepSeek-OCR...")
+        result = process_single_image(image, use_prompt)
+        print(f"[DEBUG] OCR complete, output length: {len(result)}")
+        
+        return OCRResponse(
+            success=True,
+            result=result,
+            page_count=1
+        )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        print(f"[ERROR] Image endpoint failed: {str(e)}")
+        return OCRResponse(
+            success=False,
+            error=str(e)
+        )
 
-@app.post("/ocr/pdf")
-async def process_pdf(
-    file: UploadFile = File(...),
-    prompt: Optional[str] = Form(None),
-    dpi: int = Form(144)
-):
-    """Process PDF file"""
-    if ocr_processor is None:
-        raise HTTPException(status_code=503, detail="OCR service not initialized")
-    
-    if file.content_type != 'application/pdf':
-        raise HTTPException(status_code=400, detail="File must be a PDF")
-    
+@app.post("/ocr/pdf", response_model=BatchOCRResponse)
+async def process_pdf_endpoint(file: UploadFile = File(...), prompt: Optional[str] = Form(None)):
+    """Process a PDF file with optional custom prompt"""
     try:
-        # Read PDF
-        pdf_bytes = await file.read()
+        print(f"[DEBUG] PDF endpoint called for file: {file.filename}")
+        print(f"[DEBUG] Received prompt parameter: {repr(prompt)}")
+        print(f"[DEBUG] Default PROMPT from config: {repr(PROMPT)}")
         
-        # Convert to images
-        images = pdf_to_images(pdf_bytes, dpi)
+        # Read PDF data
+        pdf_data = await file.read()
+        print(f"[DEBUG] Read {len(pdf_data)} bytes of PDF data")
+        
+        # Convert PDF to images
+        images = pdf_to_images_high_quality(pdf_data, dpi=144)
+        print(f"[DEBUG] Converted PDF to {len(images)} images")
+        
+        if not images:
+            print(f"[DEBUG] No images extracted from PDF")
+            return BatchOCRResponse(
+                success=False,
+                results=[],
+                total_pages=0,
+                filename=file.filename
+            )
+        
+        # Use provided prompt or default
+        use_prompt = prompt if prompt else PROMPT
+        print(f"[DEBUG] PDF endpoint selected prompt: {repr(use_prompt)}")
+        print(f"[DEBUG] Using custom prompt: {prompt is not None}")
         
         # Process each page
         results = []
-        for page_num, image in enumerate(images):
-            result = process_image_ocr(image, prompt)
-            result['page_count'] = page_num + 1
-            results.append(result)
+        for page_num, image in enumerate(tqdm(images, desc="Processing pages")):
+            try:
+                print(f"[DEBUG] Processing page {page_num + 1}/{len(images)}")
+                result = process_single_image(image, use_prompt)
+                results.append(OCRResponse(
+                    success=True,
+                    result=result,
+                    page_count=page_num + 1
+                ))
+                print(f"[DEBUG] Page {page_num + 1} processed successfully, output length: {len(result)}")
+            except Exception as e:
+                print(f"[ERROR] Page {page_num + 1} failed: {str(e)}")
+                results.append(OCRResponse(
+                    success=False,
+                    error=f"Page {page_num + 1} error: {str(e)}",
+                    page_count=page_num + 1
+                ))
         
-        return JSONResponse(content={
-            "success": True,
-            "results": results,
-            "total_pages": len(images),
-            "filename": file.filename
-        })
+        print(f"[DEBUG] PDF processing complete: {len(results)} pages processed")
+        return BatchOCRResponse(
+            success=True,
+            results=results,
+            total_pages=len(images),
+            filename=file.filename
+        )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        print(f"[ERROR] PDF endpoint failed: {str(e)}")
+        return BatchOCRResponse(
+            success=False,
+            results=[OCRResponse(success=False, error=str(e))],
+            total_pages=0,
+            filename=file.filename
+        )
 
 @app.post("/ocr/batch")
-async def process_batch(
-    files: List[UploadFile] = File(...),
-    prompt: Optional[str] = Form(None),
-    dpi: int = Form(144)
-):
-    """Process multiple files"""
-    if ocr_processor is None:
-        raise HTTPException(status_code=503, detail="OCR service not initialized")
-    
+async def process_batch_endpoint(files: List[UploadFile] = File(...), prompt: Optional[str] = Form(None)):
+    """Process multiple files (images and PDFs) with optional custom prompt"""
     results = []
     
     for file in files:
-        try:
-            if file.content_type == 'application/pdf':
-                # Process PDF
-                pdf_bytes = await file.read()
-                images = pdf_to_images(pdf_bytes, dpi)
-                
-                page_results = []
-                for page_num, image in enumerate(images):
-                    result = process_image_ocr(image, prompt)
-                    result['page_count'] = page_num + 1
-                    page_results.append(result)
-                
-                results.append({
-                    "filename": file.filename,
-                    "type": "pdf",
-                    "success": True,
-                    "results": page_results,
-                    "total_pages": len(images)
-                })
-                
-            elif file.content_type.startswith('image/'):
-                # Process image
-                image_bytes = await file.read()
-                image = Image.open(io.BytesIO(image_bytes))
-                result = process_image_ocr(image, prompt)
-                
-                results.append({
-                    "filename": file.filename,
-                    "type": "image",
-                    "success": True,
-                    "result": result['result'],
-                    "page_count": 1
-                })
-                
-            else:
-                results.append({
-                    "filename": file.filename,
-                    "success": False,
-                    "error": "Unsupported file type"
-                })
-                
-        except Exception as e:
-            results.append({
-                "filename": file.filename,
-                "success": False,
-                "error": str(e)
-            })
+        if file.filename.lower().endswith('.pdf'):
+            result = await process_pdf_endpoint(file, prompt)
+        else:
+            result = await process_image_endpoint(file, prompt)
+        
+        results.append({
+            "filename": file.filename,
+            "result": result
+        })
     
-    return JSONResponse(content={
-        "success": True,
-        "results": results,
-        "total_files": len(files)
-    })
+    return {"success": True, "results": results}
 
 if __name__ == "__main__":
-    print("Starting DeepSeek OCR FastAPI server...")
-    
-    # Initialize OCR processor
-    if not initialize_ocr():
-        print("Failed to initialize OCR processor. Exiting.")
-        sys.exit(1)
-    
-    # Start server
-    port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "0.0.0.0")
-    
-    print(f"Starting server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port, workers=1)
+    print("Starting DeepSeek-OCR API server...")
+    uvicorn.run(
+        "start_server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        workers=1
+    )

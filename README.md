@@ -97,7 +97,7 @@ curl -X POST https://your-api-gateway-url/ocr/pdf \
 - Automatic image scanning and vulnerability detection
 - Permissions for ECS and CI/CD systems
 
-#### Networking (`networking.ts`)
+#### Networking (`networking.stack.ts`)
 - **VPC**: 3 AZ setup with public/private/isolated subnets
 - **Security Groups**: Least-privilege access for ALB, ECS, and RDS
 - **VPC Endpoints**: Cost-optimized connectivity for AWS services
@@ -109,7 +109,7 @@ curl -X POST https://your-api-gateway-url/ocr/pdf \
 - **Application Load Balancer**: Multi-AZ with health checks and SSL termination
 - **Service Discovery**: Dynamic port mapping and service mesh ready
 
-#### API Gateway (`api-gateway.ts`)
+#### API Gateway (`api-gateway.stack.ts`)
 - **REST API**: Comprehensive endpoints with CORS support
 - **Authentication**: API keys with usage plans and throttling
 - **Binary Support**: File uploads for PDF and image processing
@@ -297,9 +297,9 @@ deepseekocr/
 │   └── custom_image_process.py  # Fixed OCR processor
 ├── src/constructs/              # CDK constructs
 │   ├── deepseek-ocr-ecr.ts     # ECR repository
-│   ├── networking.ts           # VPC and security groups
+│   ├── networking.stack.ts           # VPC and security groups
 │   ├── deepseek-ocr-ecs.ts     # ECS cluster and services
-│   ├── api-gateway.ts          # API Gateway integration
+│   ├── api-gateway.stack.ts          # API Gateway integration
 │   └── data-storage.ts         # S3 buckets and DynamoDB
 ├── lambda/                     # Lambda functions
 │   ├── consensus-evaluator/    # A2I consensus logic

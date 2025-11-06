@@ -1,62 +1,47 @@
-"""
-Custom configuration for DeepSeek-OCR
-Fixes the original config.py to handle prompt parameter correctly
-"""
+# Custom configuration for DeepSeek-OCR vLLM
+# This file replaces the original config.py during Docker build
+# Modify the PROMPT value below to change the default prompt used by the OCR service
 
-import os
+# TODO: change modes
+# Tiny: base_size = 512, image_size = 512, crop_mode = False
+# Small: base_size = 640, image_size = 640, crop_mode = False
+# Base: base_size = 1024, image_size = 1024, crop_mode = False
+# Large: base_size = 1280, image_size = 1280, crop_mode = False
+# Gundam: base_size = 1024, image_size = 640, crop_mode = True
 
-# Model configuration
-MODEL_PATH = os.getenv('MODEL_PATH', '/app/models/deepseek-ai/DeepSeek-OCR')
+BASE_SIZE = 1024
+IMAGE_SIZE = 640
+CROP_MODE = True
+MIN_CROPS= 2
+MAX_CROPS= 6 # max:9; If your GPU memory is small, it is recommended to set it to 6.
+MAX_CONCURRENCY = 100 # If you have limited GPU memory, lower the concurrency count.
+NUM_WORKERS = 64 # image pre-process (resize/padding) workers 
+PRINT_NUM_VIS_TOKENS = False
+SKIP_REPEAT = True
+MODEL_PATH = 'deepseek-ai/DeepSeek-OCR' # change to your model path
 
-# Default prompt for OCR processing
+# TODO: change INPUT_PATH
+# .pdf: run_dpsk_ocr_pdf.py; 
+# .jpg, .png, .jpeg: run_dpsk_ocr_image.py; 
+# Omnidocbench images path: run_dpsk_ocr_eval_batch.py
+
+INPUT_PATH = '' 
+OUTPUT_PATH = ''
+
+# CUSTOMIZABLE PROMPT - Modify this line to change the default prompt
+# The API will still accept custom prompts via the prompt parameter
 PROMPT = '<image>\n<|grounding|>Convert the document to markdown.'
+# PROMPT = '<image>\nFree OCR.'
+# TODO commonly used prompts
+# document: <image>\n<|grounding|>Convert the document to markdown.
+# other image: <image>\n<|grounding|>OCR this image.
+# without layouts: <image>\nFree OCR.
+# figures in document: <image>\nParse the figure.
+# general: <image>\nDescribe this image in detail.
+# rec: <image>\nLocate <|ref|>xxxx<|/ref|> in the image.
+# '先天下之忧而忧'
+# .......
 
-# Server configuration
-MAX_CONCURRENCY = int(os.getenv('MAX_CONCURRENCY', '50'))
-GPU_MEMORY_UTILIZATION = float(os.getenv('GPU_MEMORY_UTILIZATION', '0.85'))
+from transformers import AutoTokenizer
 
-# Processing configuration
-DPI = 144
-MAX_IMAGE_SIZE = (2048, 2048)
-SUPPORTED_IMAGE_FORMATS = ['PNG', 'JPEG', 'JPG', 'TIFF', 'BMP', 'GIF']
-SUPPORTED_PDF_FORMATS = ['pdf']
-
-# API configuration
-API_HOST = os.getenv('HOST', '0.0.0.0')
-API_PORT = int(os.getenv('PORT', '8000'))
-
-# Logging configuration
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-
-# Custom prompts for different use cases
-PROMPTS = {
-    'markdown': '<image>\n<|grounding|>Convert the document to markdown.',
-    'ocr': '<image>\nFree OCR.',
-    'tables': '<image>\n<|grounding|>Extract all tables and format them as markdown tables.',
-    'course_catalog': '<image>\n<|grounding|>Extract course information including course number, title, credits, and description. Format as structured data.',
-}
-
-def get_prompt(prompt_type: str = 'markdown') -> str:
-    """Get prompt by type"""
-    return PROMPTS.get(prompt_type, PROMPTS['markdown'])
-
-def validate_config():
-    """Validate configuration"""
-    if not os.path.exists(MODEL_PATH):
-        raise ValueError(f"Model path does not exist: {MODEL_PATH}")
-    
-    if MAX_CONCURRENCY <= 0:
-        raise ValueError(f"MAX_CONCURRENCY must be positive: {MAX_CONCURRENCY}")
-    
-    if not (0.1 <= GPU_MEMORY_UTILIZATION <= 1.0):
-        raise ValueError(f"GPU_MEMORY_UTILIZATION must be between 0.1 and 1.0: {GPU_MEMORY_UTILIZATION}")
-
-# Validate on import
-try:
-    validate_config()
-    print(f"Configuration loaded successfully:")
-    print(f"  Model Path: {MODEL_PATH}")
-    print(f"  Max Concurrency: {MAX_CONCURRENCY}")
-    print(f"  GPU Memory Utilization: {GPU_MEMORY_UTILIZATION}")
-except Exception as e:
-    print(f"Configuration validation failed: {e}")
+TOKENIZER = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)

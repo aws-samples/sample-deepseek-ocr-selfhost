@@ -10,10 +10,6 @@
       "type": "build"
     },
     {
-      "name": "@types/jest",
-      "type": "build"
-    },
-    {
       "name": "@types/node",
       "type": "build"
     },
@@ -50,15 +46,6 @@
       "type": "build"
     },
     {
-      "name": "jest",
-      "type": "build"
-    },
-    {
-      "name": "jest-junit",
-      "version": "^16",
-      "type": "build"
-    },
-    {
       "name": "projen",
       "type": "build"
     },
@@ -87,6 +74,10 @@
       "type": "runtime"
     },
     {
+      "name": "@aws-sdk/client-lambda",
+      "type": "runtime"
+    },
+    {
       "name": "@aws-sdk/client-s3",
       "type": "runtime"
     },
@@ -99,13 +90,37 @@
       "type": "runtime"
     },
     {
+      "name": "@aws-sdk/lib-dynamodb",
+      "type": "runtime"
+    },
+    {
+      "name": "@aws-sdk/s3-request-presigner",
+      "type": "runtime"
+    },
+    {
+      "name": "@aws-sdk/util-dynamodb",
+      "type": "runtime"
+    },
+    {
       "name": "aws-cdk-lib",
       "version": "^2.221.0",
       "type": "runtime"
     },
     {
+      "name": "aws-sdk",
+      "type": "runtime"
+    },
+    {
+      "name": "cdk-nag",
+      "type": "runtime"
+    },
+    {
       "name": "constructs",
       "version": "^10.0.5",
+      "type": "runtime"
+    },
+    {
+      "name": "dotenv",
       "type": "runtime"
     }
   ],

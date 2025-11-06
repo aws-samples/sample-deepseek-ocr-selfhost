@@ -1,0 +1,93 @@
+# Docker Compose file compatible with ECS and local development
+# This file can be used both locally and with Docker Compose ECS integration
+
+version: '3.8'
+
+services:
+  deepseek-ocr:
+    # CRITICAL: Specify platform to ensure linux/amd64 architecture
+    platform: linux/amd64
+
+    image: 039885961427.dkr.ecr.us-east-1.amazonaws.com/deepseek-ocr
+
+    # Build configuration (for local builds)
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Force build for linux/amd64 platform
+      platforms:
+        - linux/amd64
+      # Build args if needed
+      args:
+        BUILDPLATFORM: linux/amd64
+        TARGETPLATFORM: linux/amd64
+
+    container_name: deepseek-ocr-vllm
+
+    ports:
+      - "8000:8000"
+
+    # Volumes for local development
+    # Note: These won't work in ECS, use EFS or S3 instead
+    volumes:
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+
+    environment:
+      # GPU configuration
+      - CUDA_VISIBLE_DEVICES=0
+      - MODEL_PATH=/app/models/deepseek-ai/DeepSeek-OCR
+      - MAX_CONCURRENCY=5
+      - GPU_MEMORY_UTILIZATION=0.85
+      - VLLM_USE_V1=0
+      - LOG_LEVEL=INFO
+
+      # S3 configuration for model storage (ECS-friendly)
+      - MODEL_CACHE_DIR=/app/models
+      - S3_MODEL_BUCKET=your-deepseek-ocr-models-bucket
+      - AWS_DEFAULT_REGION=us-east-1
+
+      # Optional: Add these for ECS
+      # - AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+      # - ECS_CONTAINER_METADATA_URI_V4
+
+    # GPU configuration for local Docker
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          cpus: '3.75'
+          memory: 14G
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s  # 3 minutes for model loading
+
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Networks configuration (optional)
+networks:
+  default:
+    name: deepseek-ocr-network
+    driver: bridge
+
+# Volumes configuration (for local development)
+volumes:
+  models:
+    driver: local
+  outputs:
+    driver: local

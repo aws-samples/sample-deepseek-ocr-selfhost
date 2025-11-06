@@ -1,82 +1,76 @@
-# Multi-stage build to optimize final image size
-FROM nvidia/cuda:11.8-runtime-ubuntu20.04 as model-downloader
+# DeepSeek-OCR vLLM Docker Image
+# Based on official vLLM OpenAI image for better compatibility
 
-# Install Python and required tools
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    git \
-    wget \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+FROM vllm/vllm-openai:v0.8.5
 
-# Install Hugging Face CLI
-RUN pip3 install huggingface_hub
+# Switch to root user to install packages
+USER root
 
-# Download DeepSeek-OCR model (this will be ~9GB)
-WORKDIR /models
-RUN huggingface-cli download deepseek-ai/DeepSeek-OCR --local-dir deepseek-ai/DeepSeek-OCR
-
-# Main runtime stage
-FROM nvidia/cuda:11.8-runtime-ubuntu20.04
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV CUDA_VISIBLE_DEVICES=0
-ENV MODEL_PATH=/app/models/deepseek-ai/DeepSeek-OCR
-ENV MAX_CONCURRENCY=50
-ENV GPU_MEMORY_UTILIZATION=0.85
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    git \
-    wget \
-    curl \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create app directory
+# Set working directory
 WORKDIR /app
 
-# Copy model from build stage
-COPY --from=model-downloader /models /app/models
+# Minimal tools to fetch sources
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Clone DeepSeek-OCR repository
-RUN git clone https://github.com/deepseek-ai/DeepSeek-OCR.git && \
-    cd DeepSeek-OCR && \
-    git checkout main
+# Fetch upstream DeepSeek-OCR sources at build time
+RUN git clone --depth 1 https://github.com/deepseek-ai/DeepSeek-OCR.git /app/DeepSeek-OCR-src
 
-# Install Python dependencies
-RUN cd DeepSeek-OCR && \
-    pip3 install --no-cache-dir -r requirements.txt && \
-    pip3 install fastapi uvicorn python-multipart Pillow PyMuPDF
+# Copy the DeepSeek-OCR vLLM implementation (correct nested path)
+RUN cp -r /app/DeepSeek-OCR-src/DeepSeek-OCR-master/DeepSeek-OCR-vllm /app/DeepSeek-OCR-vllm
 
-# Copy custom configuration files
-COPY custom_config.py DeepSeek-OCR/config.py
-COPY custom_image_process.py DeepSeek-OCR/process/image_process.py
-COPY custom_run_dpsk_ocr_pdf.py DeepSeek-OCR/run_dpsk_ocr_pdf.py
-COPY custom_run_dpsk_ocr_image.py DeepSeek-OCR/run_dpsk_ocr_image.py
-COPY custom_run_dpsk_ocr_eval_batch.py DeepSeek-OCR/run_dpsk_ocr_eval_batch.py
+# Optional sanity check (can be removed once verified)
+# RUN ls -la /app/DeepSeek-OCR-src && ls -la /app/DeepSeek-OCR-src/DeepSeek-OCR-master
 
-# Copy FastAPI server
-COPY start_server.py /app/start_server.py
+# Copy custom files to replace the originals (transparent replacement approach)
+COPY custom_config.py ./DeepSeek-OCR-vllm/config.py
+COPY custom_image_process.py ./DeepSeek-OCR-vllm/process/image_process.py
+COPY custom_deepseek_ocr.py ./DeepSeek-OCR-vllm/deepseek_ocr.py
 
-# Make scripts executable
+# Copy custom run scripts to replace the originals
+COPY custom_run_dpsk_ocr_pdf.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_pdf.py
+COPY custom_run_dpsk_ocr_image.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_image.py
+COPY custom_run_dpsk_ocr_eval_batch.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_eval_batch.py
+
+# Copy the startup script
+COPY start_server.py .
+
+# Install Python dependencies (explicit list to avoid conflicts)
+# If you prefer upstream requirements, you can add:
+# RUN pip install --no-cache-dir -r /app/DeepSeek-OCR-src/requirements.txt
+RUN pip install --no-cache-dir \
+    PyMuPDF \
+    img2pdf \
+    einops \
+    easydict \
+    addict \
+    Pillow \
+    numpy
+
+# Install additional dependencies for the API server
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-multipart==0.0.6
+
+# Install flash-attn for optimal performance (if not already included)
+RUN pip install --no-cache-dir flash-attn==2.7.3 --no-build-isolation || echo "flash-attn may already be installed"
+
+# Downgrade tokenizers to compatible version if needed
+RUN pip install --no-cache-dir tokenizers==0.13.3 || echo "Using existing tokenizers version"
+
+# Add the DeepSeek-OCR directory to PYTHONPATH
+ENV PYTHONPATH="/app/DeepSeek-OCR-vllm:${PYTHONPATH}"
+
+# Create directories for outputs
+RUN mkdir -p /app/outputs
+
+# Make the scripts executable
 RUN chmod +x /app/start_server.py
 
-# Expose port
+# Expose the API port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Start FastAPI server
-CMD ["python3", "/app/start_server.py"]
+# Set the default command to use our custom server
+ENTRYPOINT ["/usr/bin/python3", "/app/start_server.py"]
