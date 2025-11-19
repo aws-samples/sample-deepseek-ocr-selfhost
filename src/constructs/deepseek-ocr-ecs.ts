@@ -246,6 +246,13 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
       ],
     });
 
+    // Note: deploymentConfiguration is not available for EC2 services in CDK
+    // To prevent GPU resource contention during deployments:
+    // 1. Manually stop old tasks before deploying (as we did today)
+    // 2. Use the deployment script with force deployment
+    // 3. Consider using Fargate with GPU support when available
+    // 4. Or add a second GPU instance during deployments, then scale back
+
     // Register service with target group
     this.service.attachToApplicationTargetGroup(this.targetGroup);
 

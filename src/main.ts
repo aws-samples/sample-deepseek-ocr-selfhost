@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { Aspects } from 'aws-cdk-lib';
 import * as cdk from 'aws-cdk-lib';
 import { config } from 'dotenv';
+import { AwsSolutionsChecks } from 'cdk-nag';
 
 config();
 
@@ -12,6 +14,7 @@ const CDK_DEFAULT_REGION = process.env.CDK_DEFAULT_REGION || 'us-east-1';
 const CDK_DEFAULT_ACCOUNT = process.env.CDK_DEFAULT_ACCOUNT || '';
 
 const app = new cdk.App();
+Aspects.of(app).add(new AwsSolutionsChecks());
 
 const props = {
   env: {

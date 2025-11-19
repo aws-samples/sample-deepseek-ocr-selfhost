@@ -28,6 +28,7 @@ const project = new awscdk.AwsCdkTypeScriptApp({
     'axios',
     'form-data',
     'aws-lambda',
+    'cdk-nag',
   ],
 
   devDeps: [
@@ -92,6 +93,7 @@ const project = new awscdk.AwsCdkTypeScriptApp({
     '*.tsbuildinfo',
     '.idea',
     '!src/lib/',
+    'local-docs/'
   ],
 
   // Sample code generation
