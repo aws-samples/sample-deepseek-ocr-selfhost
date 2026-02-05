@@ -159,8 +159,9 @@ def initialize_model():
         )
 
         # Set up sampling parameters
+        # Use more aggressive repeat prevention (matching custom_run_dpsk_ocr_pdf.py)
         from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
-        logits_processors = [NoRepeatNGramLogitsProcessor(ngram_size=30, window_size=90, whitelist_token_ids={128821, 128822})]
+        logits_processors = [NoRepeatNGramLogitsProcessor(ngram_size=20, window_size=50, whitelist_token_ids={128821, 128822})]
 
         sampling_params = SamplingParams(
             temperature=0.1,
@@ -244,9 +245,10 @@ def process_single_image(
     print(f"[DEBUG] Model output (first 100 chars): {repr(result[:100])}")
     print(f"[DEBUG] Model output length: {len(result)} characters")
 
-    # Clean up result
-    if '<ï½œendâ–ofâ–sentenceï½œ>' in result:
-        result = result.replace('<ï½œendâ–ofâ–sentenceï½œ>', '')
+    # Clean up result - remove end-of-sentence tokens
+    # Note: The token uses fullwidth characters: ｜ (U+FF5C) and ▁ (U+2581)
+    if '<｜end▁of▁sentence｜>' in result:
+        result = result.replace('<｜end▁of▁sentence｜>', '')
         print(f"[DEBUG] Removed end-of-sentence tokens")
 
     return result
@@ -275,7 +277,7 @@ async def health_check():
 @app.post("/ocr/image", response_model=OCRResponse)
 async def process_image_endpoint(
     file: UploadFile = File(...),
-    prompt: Optional[str] = Form('<image>'),
+    prompt: Optional[str] = Form(None),
     temperature: Optional[float] = Form(None),
     top_p: Optional[float] = Form(None),
     max_tokens: Optional[int] = Form(None),
@@ -297,8 +299,8 @@ async def process_image_endpoint(
         print(f"[DEBUG] Default PROMPT from config: {repr(PROMPT)}")
         print(f"[API] Sampling overrides: temperature={temperature}, top_p={top_p}, max_tokens={max_tokens}")
 
-        # Use provided prompt or default
-        use_prompt = prompt if prompt and prompt.strip() else '<image>'
+        # Use provided prompt or default from config (includes grounding instruction)
+        use_prompt = prompt if prompt and prompt.strip() else PROMPT
         print(f"[DEBUG] Image endpoint selected prompt: {repr(use_prompt)}")
         print(f"[DEBUG] Using custom prompt: {prompt is not None}")
 
@@ -329,7 +331,7 @@ async def process_image_endpoint(
 @app.post("/ocr/pdf", response_model=BatchOCRResponse)
 async def process_pdf_endpoint(
     file: UploadFile = File(...),
-    prompt: Optional[str] = Form('<image>'),
+    prompt: Optional[str] = Form(None),
     temperature: Optional[float] = Form(None),
     top_p: Optional[float] = Form(None),
     max_tokens: Optional[int] = Form(None),
@@ -341,7 +343,7 @@ async def process_pdf_endpoint(
         print(f"[DEBUG] Default PROMPT from config: {repr(PROMPT)}")
         print(f"[API] Sampling overrides: temperature={temperature}, top_p={top_p}, max_tokens={max_tokens}")
 
-       # Read PDF data
+        # Read PDF data
         pdf_data = await file.read()
         print(f"[DEBUG] Read {len(pdf_data)} bytes of PDF data")
 
@@ -358,15 +360,12 @@ async def process_pdf_endpoint(
                 filename=file.filename
             )
 
-        # Use provided prompt or default
-        use_prompt = prompt if prompt else PROMPT
+        # Use provided prompt or default from config (includes grounding instruction)
+        use_prompt = prompt if prompt and prompt.strip() else PROMPT
         print(f"[DEBUG] PDF endpoint selected prompt: {repr(use_prompt)}")
         print(f"[DEBUG] Using custom prompt: {prompt is not None}")
 
         # Process each page
-        results = []
-        use_prompt = prompt if prompt and prompt.strip() else '<image>'
-
         results = []
         for page_num, image in enumerate(tqdm(images, desc="Processing pages")):
             try:
