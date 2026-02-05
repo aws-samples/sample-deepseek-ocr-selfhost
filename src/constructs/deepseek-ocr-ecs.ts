@@ -26,6 +26,12 @@ export interface DeepSeekOcrEc2GpuProps {
   instanceType?: ec2.InstanceType;
   spotPrice?: string;
   dockerBuildContext: string;
+  /**
+   * Optional Golden AMI ID with pre-baked model and dependencies.
+   * If provided, uses this AMI instead of the default ECS GPU-optimized AMI.
+   * This significantly reduces cold start time from ~25-65 min to ~5 min.
+   */
+  goldenAmiId?: string;
 }
 
 export class DeepSeekOcrEc2GpuConstruct extends Construct {
@@ -44,14 +50,15 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
     const {
       vpc,
       securityGroups,
-      minCapacity = 1,
-      maxCapacity = 3,
-      desiredCapacity = 1, // Start with 1 GPU instance
+      minCapacity = 0, // Scale-to-zero: start with 0 instances
+      maxCapacity = 20, // Allow scaling up to 20 instances
+      desiredCapacity = 0, // Scale-to-zero: start with 0 instances
       kmsKey,
       accessLogsBucket,
-      instanceType = ec2.InstanceType.of(ec2.InstanceClass.G4DN, ec2.InstanceSize.XLARGE),
+      instanceType = ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE), // G5 for BF16 support
       spotPrice,
       dockerBuildContext,
+      goldenAmiId,
     } = props;
 
     // Create ECS cluster
@@ -61,10 +68,15 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
       containerInsights: true,
     });
 
+    // Determine which AMI to use: Golden AMI (fast cold start) or default ECS GPU AMI
+    const machineImage = goldenAmiId
+      ? ec2.MachineImage.genericLinux({ [this.node.tryGetContext('aws:cdk:region') || 'us-east-1']: goldenAmiId })
+      : ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.GPU);
+
     // Create Launch Template for GPU instances
     const launchTemplate = new ec2.LaunchTemplate(this, getCdkConstructId({ resourceName: 'gpu-launch-template' }, this), {
       instanceType,
-      machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.GPU), // GPU-optimized AMI
+      machineImage, // Use Golden AMI if provided, otherwise default ECS GPU AMI
       userData: ec2.UserData.forLinux(),
       securityGroup: securityGroups.ecs,
       role: this.createInstanceRole(),
@@ -124,9 +136,8 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
             version: '$Latest',
           },
           overrides: [
-            { instanceType: 'g4dn.xlarge' },
-            { instanceType: 'g4dn.2xlarge' }, // Fallback option
-            { instanceType: 'g5.xlarge' }, // Alternative GPU instance type
+            { instanceType: 'g5.xlarge' }, // Primary: A10G GPU with BF16 support
+            { instanceType: 'g5.2xlarge' }, // Fallback: Larger A10G instance
           ],
         },
       };
@@ -235,14 +246,14 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
         {
           capacityProvider: capacityProvider.capacityProviderName,
           weight: 1,
-          base: 1,
+          base: 0, // Scale-to-zero: no base capacity required
         },
       ],
       placementStrategies: [
         ecs.PlacementStrategy.spreadAcrossInstances(),
       ],
       placementConstraints: [
-        ecs.PlacementConstraint.memberOf('attribute:ecs.instance-type =~ g4dn.*'),
+        ecs.PlacementConstraint.memberOf('attribute:ecs.instance-type =~ g5.*'),
       ],
     });
 
@@ -377,16 +388,16 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
       // GPU configuration
       gpuCount: 1, // Request 1 GPU
 
-      // Environment variables - FIXED: Use HuggingFace repository ID, not local path
+      // Environment variables - DeepSeek-OCR-2 with BF16 on g5.xlarge
       environment: {
         // GPU settings
         CUDA_VISIBLE_DEVICES: '0',
 
-        // CRITICAL FIX: Use the HuggingFace repository ID instead of local path
-        MODEL_PATH: 'deepseek-ai/DeepSeek-OCR', // This is the HuggingFace repo ID
-        VLLM_TORCH_DTYPE: 'half',
+        // DeepSeek-OCR-2 model configuration
+        MODEL_PATH: 'deepseek-ai/DeepSeek-OCR-2', // HuggingFace repo ID for OCR-2
+        VLLM_TORCH_DTYPE: 'bfloat16', // BF16 for A10G GPU (g5 instances)
 
-        // Model caching directories
+        // Model caching directories - check Golden AMI cache first
         HF_HOME: '/app/models',
         TRANSFORMERS_CACHE: '/app/models',
         HUGGINGFACE_HUB_CACHE: '/app/models',
@@ -397,8 +408,10 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
         VLLM_USE_V1: '0',
         LOG_LEVEL: 'INFO',
 
-        // Optional: S3 backup for model cache (can be removed if not using S3)
-        MODEL_CACHE_DIR: '/app/models',
+        // Golden AMI model cache location (pre-downloaded model)
+        MODEL_CACHE_DIR: '/mnt/ecs-data/models',
+
+        // Optional: S3 backup for model cache
         S3_MODEL_BUCKET: `${this.node.tryGetContext('environment')}-deepseek-ocr-models`,
       },
 

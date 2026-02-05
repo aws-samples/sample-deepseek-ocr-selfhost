@@ -125,26 +125,45 @@ def initialize_model():
     global llm, sampling_params
 
     if llm is None:
-        print("Initializing DeepSeek-OCR model...")
+        print("Initializing DeepSeek-OCR-2 model...")
         print(f"Model path from config: {MODEL_PATH}")
 
         # Get environment variable overrides
         model_path = os.environ.get('MODEL_PATH', MODEL_PATH)
         print(f"Final model path: {model_path}")
 
-        # Set up model download directory if specified
-        hf_home = os.environ.get('HF_HOME', '/app/models')
+        # Check for Golden AMI pre-cached model first
+        golden_ami_cache = '/mnt/ecs-data/models'
+        default_cache = '/app/models'
+
+        if os.path.exists(golden_ami_cache) and os.listdir(golden_ami_cache):
+            hf_home = golden_ami_cache
+            print(f"Using Golden AMI pre-cached models at: {golden_ami_cache}")
+        else:
+            hf_home = os.environ.get('HF_HOME', default_cache)
+            print(f"Using standard model cache: {hf_home}")
+
         os.environ['HF_HOME'] = hf_home
         os.environ['TRANSFORMERS_CACHE'] = hf_home
         os.environ['HUGGINGFACE_HUB_CACHE'] = hf_home
         print(f"Model cache directory: {hf_home}")
 
+        # Get dtype from environment (default: bfloat16 for g5/A10G)
         dtype = os.environ.get('VLLM_TORCH_DTYPE', VLLM_TORCH_DTYPE)
         print(f"dtype: {dtype}")
 
+        # Validate dtype for current GPU
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"GPU detected: {gpu_name}")
+            # A10G (g5) supports bfloat16, T4 (g4dn) does not
+            if 'T4' in gpu_name and dtype == 'bfloat16':
+                print("WARNING: T4 GPU detected but bfloat16 requested. Falling back to float16.")
+                dtype = 'float16'
+
         # Initialize vLLM engine with the Hugging Face repository ID
         llm = LLM(
-            model=model_path,  # Use HF repository ID: "deepseek-ai/DeepSeek-OCR"
+            model=model_path,  # Use HF repository ID: "deepseek-ai/DeepSeek-OCR-2"
             hf_overrides={"architectures": ["DeepseekOCRForCausalLM"]},
             enforce_eager=True,
             trust_remote_code=True,
@@ -155,7 +174,7 @@ def initialize_model():
             gpu_memory_utilization=0.9,
             disable_mm_preprocessor_cache=True,
             download_dir=hf_home,  # Specify where to download and cache the model
-            dtype=dtype,  # Use float16 for Tesla T4 and similar GPUs
+            dtype=dtype,  # Use bfloat16 for A10G (g5), float16 for T4 (g4dn)
         )
 
         # Set up sampling parameters

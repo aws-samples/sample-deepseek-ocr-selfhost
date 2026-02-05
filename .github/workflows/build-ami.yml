@@ -1,0 +1,202 @@
+# GitHub Actions workflow to build DeepSeek-OCR Golden AMI
+# Triggers on changes to packer/ or docker/ directories
+
+name: Build Golden AMI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packer/**'
+      - 'docker/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packer/**'
+      - 'docker/**'
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: 'AWS Region for AMI'
+        required: false
+        default: 'us-east-1'
+      instance_type:
+        description: 'Instance type for Packer build'
+        required: false
+        default: 'g5.xlarge'
+
+env:
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PACKER_VERSION: '1.10.0'
+
+jobs:
+  validate:
+    name: Validate Packer Template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Initialize Packer
+        working-directory: packer
+        run: packer init deepseek-ocr-golden.pkr.hcl
+
+      - name: Validate Packer template
+        working-directory: packer
+        run: packer validate deepseek-ocr-golden.pkr.hcl
+
+  build:
+    name: Build Golden AMI
+    runs-on: ubuntu-latest
+    needs: validate
+    # Only build on push to main or manual trigger (not on PRs)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      ami_id: ${{ steps.build.outputs.ami_id }}
+      ami_name: ${{ steps.build.outputs.ami_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PACKER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Initialize Packer
+        working-directory: packer
+        run: packer init deepseek-ocr-golden.pkr.hcl
+
+      - name: Build AMI
+        id: build
+        working-directory: packer
+        env:
+          PKR_VAR_aws_region: ${{ env.AWS_REGION }}
+          PKR_VAR_instance_type: ${{ github.event.inputs.instance_type || 'g5.xlarge' }}
+          PKR_VAR_vpc_id: ${{ secrets.PACKER_VPC_ID }}
+          PKR_VAR_subnet_id: ${{ secrets.PACKER_SUBNET_ID }}
+        run: |
+          # Run Packer build
+          packer build -machine-readable deepseek-ocr-golden.pkr.hcl | tee build.log
+
+          # Extract AMI ID from manifest
+          AMI_ID=$(jq -r '.builds[0].artifact_id | split(":")[1]' manifest.json)
+          AMI_NAME=$(jq -r '.builds[0].custom_data.ami_name // "unknown"' manifest.json)
+
+          echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "ami_name=$AMI_NAME" >> $GITHUB_OUTPUT
+
+          echo "### AMI Build Complete :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| AMI ID | \`$AMI_ID\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-manifest
+          path: packer/manifest.json
+          retention-days: 90
+
+  update-cdk-context:
+    name: Update CDK Context
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.outputs.ami_id != ''
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Update cdk.json with new AMI ID
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+
+          # Update cdk.json if it exists and has goldenAmiId context
+          if [ -f cdk.json ]; then
+            # Check if goldenAmiId exists in context
+            if jq -e '.context.goldenAmiId' cdk.json > /dev/null 2>&1; then
+              jq --arg ami "$AMI_ID" '.context.goldenAmiId = $ami' cdk.json > cdk.json.tmp
+              mv cdk.json.tmp cdk.json
+              echo "Updated cdk.json with goldenAmiId: $AMI_ID"
+            else
+              echo "goldenAmiId not found in cdk.json context, skipping update"
+            fi
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: update Golden AMI to ${{ needs.build.outputs.ami_id }}"
+          title: "chore: Update Golden AMI to ${{ needs.build.outputs.ami_id }}"
+          body: |
+            ## Golden AMI Update
+
+            A new Golden AMI has been built and is ready for deployment.
+
+            | Property | Value |
+            |----------|-------|
+            | AMI ID | `${{ needs.build.outputs.ami_id }}` |
+            | Region | ${{ env.AWS_REGION }} |
+            | Build | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+            ### Changes Included
+            This AMI includes:
+            - Pre-baked DeepSeek-OCR-2 model (~6GB)
+            - NVIDIA drivers and container toolkit
+            - vLLM and flash-attn dependencies
+            - ECS agent configuration
+
+            ### Deployment
+            After merging, deploy with:
+            ```bash
+            STAGE=dev npm run deploy:dev
+            ```
+          branch: chore/update-golden-ami
+          delete-branch: true
+
+  notify:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always()
+
+    steps:
+      - name: Build succeeded
+        if: needs.build.result == 'success'
+        run: |
+          echo "### :white_check_mark: Golden AMI Build Succeeded" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "AMI ID: \`${{ needs.build.outputs.ami_id }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build failed
+        if: needs.build.result == 'failure'
+        run: |
+          echo "### :x: Golden AMI Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Please check the build logs for details." >> $GITHUB_STEP_SUMMARY
