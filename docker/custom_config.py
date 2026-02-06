@@ -1,4 +1,4 @@
-# Custom configuration for DeepSeek-OCR-2 vLLM
+# Custom configuration for DeepSeek-OCR vLLM
 # This file replaces the original config.py during Docker build
 # Modify the PROMPT value below to change the default prompt used by the OCR service
 
@@ -9,10 +9,10 @@ import os
 # Small: base_size = 640, image_size = 640, crop_mode = False
 # Base: base_size = 1024, image_size = 1024, crop_mode = False
 # Large: base_size = 1280, image_size = 1280, crop_mode = False
-# Gundam: base_size = 1024, image_size = 768, crop_mode = True (recommended for OCR-2)
+# Gundam: base_size = 1024, image_size = 768, crop_mode = True
 
 BASE_SIZE = 1024
-IMAGE_SIZE = 768  # Updated for DeepSeek-OCR-2 (larger than OCR-1)
+IMAGE_SIZE = 512  # Standard size for DeepSeek-OCR
 CROP_MODE = True
 MIN_CROPS = 2
 MAX_CROPS = 6  # max:9; If your GPU memory is small, it is recommended to set it to 6.
@@ -21,9 +21,9 @@ NUM_WORKERS = 64  # image pre-process (resize/padding) workers
 PRINT_NUM_VIS_TOKENS = False
 SKIP_REPEAT = True
 
-# DeepSeek-OCR-2 Model Configuration
+# DeepSeek-OCR Model Configuration
 # Use environment variables for flexibility (Golden AMI may override)
-MODEL_PATH = os.environ.get('MODEL_PATH', 'deepseek-ai/DeepSeek-OCR-2')
+MODEL_PATH = os.environ.get('MODEL_PATH', 'deepseek-ai/DeepSeek-OCR')
 VLLM_TORCH_DTYPE = os.environ.get('VLLM_TORCH_DTYPE', 'bfloat16')  # BF16 for g5 (A10G GPU)
 
 # Check for pre-cached model in Golden AMI location

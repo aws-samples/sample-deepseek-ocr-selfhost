@@ -246,7 +246,7 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
         {
           capacityProvider: capacityProvider.capacityProviderName,
           weight: 1,
-          base: 0, // Scale-to-zero: no base capacity required
+          base: 1, // Always keep at least 1 task running
         },
       ],
       placementStrategies: [
@@ -388,13 +388,13 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
       // GPU configuration
       gpuCount: 1, // Request 1 GPU
 
-      // Environment variables - DeepSeek-OCR-2 with BF16 on g5.xlarge
+      // Environment variables - DeepSeek-OCR with BF16 on g5.xlarge
       environment: {
         // GPU settings
         CUDA_VISIBLE_DEVICES: '0',
 
-        // DeepSeek-OCR-2 model configuration
-        MODEL_PATH: 'deepseek-ai/DeepSeek-OCR-2', // HuggingFace repo ID for OCR-2
+        // DeepSeek-OCR model configuration
+        MODEL_PATH: 'deepseek-ai/DeepSeek-OCR', // HuggingFace repo ID
         VLLM_TORCH_DTYPE: 'bfloat16', // BF16 for A10G GPU (g5 instances)
 
         // Model caching directories - check Golden AMI cache first

@@ -42,13 +42,12 @@ export class EcsStack extends cdk.Stack {
     kmsKey.grantEncryptDecrypt(taskRole);
 
     // ECS Cluster Stack - g5.xlarge for DeepSeek-OCR-2 with BF16 support
-    // Scale-to-zero enabled: min=0, max=20, desired=0
     const ecsClusterConstruct = new DeepSeekOcrEc2GpuConstruct(this, 'EcsGpuService', {
       vpc,
       securityGroups,
-      minCapacity: 0, // Scale-to-zero: no minimum instances
+      minCapacity: 1, // Always keep at least 1 instance running
       maxCapacity: 20, // Allow scaling up to 20 instances
-      desiredCapacity: 0, // Scale-to-zero: start with 0 instances
+      desiredCapacity: 1, // Start with 1 instance
       dockerBuildContext: path.join(__dirname, '../../docker'),
       kmsKey,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE), // A10G GPU for BF16

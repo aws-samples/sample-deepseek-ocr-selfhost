@@ -125,7 +125,7 @@ def initialize_model():
     global llm, sampling_params
 
     if llm is None:
-        print("Initializing DeepSeek-OCR-2 model...")
+        print("Initializing DeepSeek-OCR model...")
         print(f"Model path from config: {MODEL_PATH}")
 
         # Get environment variable overrides
@@ -163,7 +163,7 @@ def initialize_model():
 
         # Initialize vLLM engine with the Hugging Face repository ID
         llm = LLM(
-            model=model_path,  # Use HF repository ID: "deepseek-ai/DeepSeek-OCR-2"
+            model=model_path,  # Use HF repository ID: "deepseek-ai/DeepSeek-OCR"
             hf_overrides={"architectures": ["DeepseekOCRForCausalLM"]},
             enforce_eager=True,
             trust_remote_code=True,

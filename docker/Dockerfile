@@ -1,4 +1,4 @@
-# DeepSeek-OCR-2 vLLM Docker Image
+# DeepSeek-OCR vLLM Docker Image
 # Based on official vLLM OpenAI image for better compatibility
 # Supports BF16 inference on g5.xlarge (A10G GPU)
 
@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Fetch upstream DeepSeek-OCR-2 sources at build time
+# Fetch upstream DeepSeek-OCR sources at build time
 RUN git clone --depth 1 https://github.com/deepseek-ai/DeepSeek-OCR.git /app/DeepSeek-OCR-src
 
 # Copy the DeepSeek-OCR vLLM implementation (correct nested path)
-# Note: DeepSeek-OCR-2 uses the same vLLM implementation structure
+# Copy the vLLM implementation for DeepSeek-OCR
 RUN cp -r /app/DeepSeek-OCR-src/DeepSeek-OCR-master/DeepSeek-OCR-vllm /app/DeepSeek-OCR-vllm
 
 # Copy custom files to replace the originals (transparent replacement approach)
@@ -35,7 +35,7 @@ COPY custom_run_dpsk_ocr_eval_batch.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_eval_bat
 # Copy the startup script
 COPY start_server.py .
 
-# Upgrade pip and install core dependencies with specific versions for DeepSeek-OCR-2
+# Upgrade pip and install core dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
     torch==2.6.0 \
@@ -76,8 +76,8 @@ ENV HF_HOME="/app/models"
 ENV TRANSFORMERS_CACHE="/app/models"
 ENV HUGGINGFACE_HUB_CACHE="/app/models"
 
-# Default model configuration for DeepSeek-OCR-2
-ENV MODEL_PATH="deepseek-ai/DeepSeek-OCR-2"
+# Default model configuration for DeepSeek-OCR
+ENV MODEL_PATH="deepseek-ai/DeepSeek-OCR"
 ENV VLLM_TORCH_DTYPE="bfloat16"
 
 # Make the scripts executable
