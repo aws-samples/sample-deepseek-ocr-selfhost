@@ -20,9 +20,14 @@ export const handler = async (event: LambdaHandlerEvent) => {
       throw new ClientError('Required field s3Key is missing', 400);
     }
 
+    // Detect file type for Step Functions routing
+    const lowerKey = s3Key.toLowerCase();
+    const fileType = lowerKey.endsWith('.xlsx') || lowerKey.endsWith('.xls') ? 'excel' : 'pdf';
+
     const executionInput = JSON.stringify({
       s3Key,
       bucket: FILES_BUCKET,
+      fileType,
     });
 
     // Create a safe execution name (alphanumeric, hyphens, underscores only, max 80 chars)

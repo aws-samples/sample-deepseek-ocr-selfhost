@@ -38,7 +38,7 @@ export class PipelineStack extends cdk.Stack {
 
     // ========== IAM Roles ==========
 
-    // Role for Docker Lambdas (split-pdf, pdf-to-image)
+    // Role for Docker Lambdas (split-pdf, pdf-to-image, excel-to-text)
     const dockerLambdaRole = createDefaultLambdaRole(
       this,
       getCdkConstructId({ resourceName: 'pipeline-docker-role' }, scope),
@@ -152,6 +152,26 @@ export class PipelineStack extends cdk.Stack {
       },
     );
 
+    const excelToTextFn = new lambda.DockerImageFunction(
+      this,
+      getCdkConstructId({ resourceName: 'excel-to-text-fn' }, scope),
+      {
+        functionName: getCdkConstructId({ resourceName: 'excel-to-text' }, this),
+        code: lambda.DockerImageCode.fromImageAsset(
+          path.join(__dirname, '../resources/lambda/excel-to-text'),
+          { platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64 },
+        ),
+        architecture: lambda.Architecture.X86_64,
+        role: dockerLambdaRole,
+        memorySize: 1024,
+        timeout: Duration.minutes(5),
+        environment: {
+          FILES_BUCKET: fileBucketName,
+          REGION: this.region,
+        },
+      },
+    );
+
     // ========== TypeScript Lambdas ==========
 
     const ocrPageFn = createOcrPageLambda(
@@ -194,7 +214,9 @@ export class PipelineStack extends cdk.Stack {
       },
     );
 
-    // Step 1: Split PDF into single pages
+    // ---- PDF Path ----
+
+    // Split PDF into single pages
     const splitPdfTask = new tasks.LambdaInvoke(this, 'SplitPdf', {
       lambdaFunction: splitPdfFn,
       resultPath: '$.splitResult',
@@ -206,14 +228,14 @@ export class PipelineStack extends cdk.Stack {
       backoffRate: 2,
     });
 
-    // Step 2a: Convert single-page PDF to JPEG
+    // Convert single-page PDF to JPEG
     const convertToImageTask = new tasks.LambdaInvoke(this, 'ConvertToImage', {
       lambdaFunction: pdfToImageFn,
       resultPath: '$.convertResult',
       taskTimeout: sfn.Timeout.duration(Duration.minutes(5)),
     });
 
-    // Step 2b: OCR the JPEG via DeepSeek ALB
+    // OCR the JPEG via DeepSeek ALB
     const ocrPageTask = new tasks.LambdaInvoke(this, 'OcrPage', {
       lambdaFunction: ocrPageFn,
       payload: sfn.TaskInput.fromObject({
@@ -232,7 +254,7 @@ export class PipelineStack extends cdk.Stack {
       backoffRate: 2,
     });
 
-    // Step 2c: Classify document type and extract structured JSON via Bedrock
+    // Classify + extract for PDF pages (markdown comes from OCR result)
     const classifyExtractTask = new tasks.LambdaInvoke(this, 'ClassifyAndExtract', {
       lambdaFunction: classifyExtractFn,
       payload: sfn.TaskInput.fromObject({
@@ -244,20 +266,58 @@ export class PipelineStack extends cdk.Stack {
       taskTimeout: sfn.Timeout.duration(Duration.minutes(2)),
     });
 
-    // Chain the per-page processing steps
-    const mapChain = convertToImageTask
+    const pdfMapChain = convertToImageTask
       .next(ocrPageTask)
       .next(classifyExtractTask);
 
-    // Step 2: Map over all pages with concurrency limit
     const processPages = new sfn.Map(this, 'ProcessPages', {
       maxConcurrency: 3,
       itemsPath: '$.splitResult.Payload.generated',
       resultPath: '$.mapResults',
     });
-    processPages.itemProcessor(mapChain);
+    processPages.itemProcessor(pdfMapChain);
 
-    // Step 3: Collect results and reshape for SaveToS3
+    const pdfPath = splitPdfTask.next(processPages);
+
+    // ---- Excel Path ----
+
+    // Convert Excel sheets to markdown text
+    const excelToSheetsTask = new tasks.LambdaInvoke(this, 'ExcelToSheets', {
+      lambdaFunction: excelToTextFn,
+      resultPath: '$.splitResult',
+      taskTimeout: sfn.Timeout.duration(Duration.minutes(5)),
+    });
+
+    // Classify + extract for Excel sheets (markdown comes directly from sheet conversion)
+    const classifyExtractExcelTask = new tasks.LambdaInvoke(this, 'ClassifyAndExtractExcel', {
+      lambdaFunction: classifyExtractFn,
+      payload: sfn.TaskInput.fromObject({
+        'markdown.$': '$.markdown',
+        'pageNumber.$': '$.pageNumber',
+        'filename.$': '$.filename',
+      }),
+      resultPath: '$.classifyResult',
+      taskTimeout: sfn.Timeout.duration(Duration.minutes(2)),
+    });
+
+    const processSheets = new sfn.Map(this, 'ProcessSheets', {
+      maxConcurrency: 3,
+      itemsPath: '$.splitResult.Payload.generated',
+      resultPath: '$.mapResults',
+    });
+    processSheets.itemProcessor(classifyExtractExcelTask);
+
+    const excelPath = excelToSheetsTask.next(processSheets);
+
+    // ---- Route by file type ----
+
+    const fileTypeChoice = new sfn.Choice(this, 'DetectFileType');
+    fileTypeChoice
+      .when(sfn.Condition.stringEquals('$.fileType', 'excel'), excelPath)
+      .otherwise(pdfPath);
+
+    // ---- Common tail: collect + save ----
+
     const collectResults = new sfn.Pass(this, 'CollectResults', {
       parameters: {
         'mapResults.$': '$.mapResults',
@@ -267,15 +327,14 @@ export class PipelineStack extends cdk.Stack {
       },
     });
 
-    // Step 4: Save consolidated results to S3
     const saveToS3Task = new tasks.LambdaInvoke(this, 'SaveToS3', {
       lambdaFunction: saveResultsFn,
       taskTimeout: sfn.Timeout.duration(Duration.minutes(1)),
     });
 
-    // Wire up the full state machine
-    const definition = splitPdfTask
-      .next(processPages)
+    // Wire up: Choice -> (PDF | Excel) -> CollectResults -> SaveToS3
+    const definition = fileTypeChoice
+      .afterwards()
       .next(collectResults)
       .next(saveToS3Task);
 
