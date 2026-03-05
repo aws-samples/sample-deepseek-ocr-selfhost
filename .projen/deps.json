@@ -62,6 +62,10 @@
       "type": "build"
     },
     {
+      "name": "@aws-sdk/client-bedrock-runtime",
+      "type": "runtime"
+    },
+    {
       "name": "@aws-sdk/client-dynamodb",
       "type": "runtime"
     },

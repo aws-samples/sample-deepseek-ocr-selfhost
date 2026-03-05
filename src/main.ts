@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { Aspects } from 'aws-cdk-lib';
 import * as cdk from 'aws-cdk-lib';
-import { config } from 'dotenv';
 import { AwsSolutionsChecks } from 'cdk-nag';
+import { config } from 'dotenv';
 
 config();
 

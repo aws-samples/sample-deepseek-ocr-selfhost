@@ -5,6 +5,7 @@ import { EcsStack } from '../stacks/ecs.stack';
 import { KmsStack } from '../stacks/kms.stack';
 import { LambdasStack } from '../stacks/lambdas.stack';
 import { NetworkingStack } from '../stacks/networking.stack';
+import { PipelineStack } from '../stacks/pipeline.stack';
 import { S3Stack } from '../stacks/s3.stack';
 
 const REGION = process.env.CDK_DEFAULT_REGION || '';
@@ -64,11 +65,25 @@ export class DevStage extends Stage {
     });
     const { startProcessingLambda } = lambdasStack;
 
+    // Pipeline Stack
+    const pipelineStack = new PipelineStack(this, 'DeepSeek-OCR-Pipeline-Stack', {
+      vpc,
+      kmsKey,
+      fileBucketName: filesBucket.bucketName,
+      securityGroup: securityGroups.lambdas,
+      loadBalancerUrl: loadBalancer.loadBalancerDnsName,
+    });
+    pipelineStack.node.addDependency(ecsStack);
+    pipelineStack.node.addDependency(s3Stack);
+
+    const { startPipelineLambda } = pipelineStack;
+
     // Api Stack
     const apiGatewayStack = new ApiGatewayStack(this, 'DeepSeek-OCR-Api-Stack', {
       vpc,
       loadBalancer,
       startProcessingLambda,
+      startPipelineLambda,
     });
   }
 }

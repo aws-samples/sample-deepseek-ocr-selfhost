@@ -356,7 +356,7 @@ export class DeepSeekOcrEc2GpuConstruct extends Construct {
 
     // Create log group
     const logGroup = new logs.LogGroup(this, getCdkConstructId({ resourceName: 'log-group' }, this), {
-      logGroupName: '/aws/ecs/deepseek-ocr-gpu',
+      logGroupName: `/aws/ecs/deepseek-ocr-gpu-${process.env.STAGE}`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
       encryptionKey: kmsKey,

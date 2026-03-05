@@ -13,6 +13,7 @@ import { getCdkConstructId } from '../shared/cdk-helpers';
 export interface ApiGatewayProps extends cdk.StackProps {
   vpc: ec2.IVpc;
   startProcessingLambda: IFunction;
+  startPipelineLambda?: IFunction;
   loadBalancer?: elbv2.IApplicationLoadBalancer;
   enableApiKeys?: boolean;
   usagePlan?: {
@@ -36,6 +37,7 @@ export class ApiGatewayStack extends cdk.Stack {
       vpc,
       loadBalancer,
       startProcessingLambda,
+      startPipelineLambda,
       enableApiKeys = true,
       usagePlan = {
         throttleRateLimit: 100,
@@ -172,7 +174,7 @@ export class ApiGatewayStack extends cdk.Stack {
     this.requestValidator = this.createRequestValidator(scope);
 
     // Add API resources and methods
-    this.createApiResources({ loadBalancer, startProcessingLambda });
+    this.createApiResources({ loadBalancer, startProcessingLambda, startPipelineLambda });
 
     // Create API Key and Usage Plan if enabled
     if (enableApiKeys) {
@@ -183,10 +185,12 @@ export class ApiGatewayStack extends cdk.Stack {
   private createApiResources({
     loadBalancer,
     startProcessingLambda,
+    startPipelineLambda,
   }:
   {
     loadBalancer?: elbv2.IApplicationLoadBalancer;
     startProcessingLambda: IFunction;
+    startPipelineLambda?: IFunction;
   }): void {
     // Health check endpoint - specific integration
     const health = this.api.root.addResource('health');
@@ -367,6 +371,28 @@ export class ApiGatewayStack extends cdk.Stack {
         },
       ],
     });
+
+    // Pipeline endpoint
+    if (startPipelineLambda) {
+      const pipeline = this.api.root.addResource('pipeline');
+      const process = pipeline.addResource('process');
+      process.addMethod('POST', new LambdaIntegration(startPipelineLambda), {
+        requestValidator: this.requestValidator,
+        apiKeyRequired: true,
+        requestParameters: {
+          'method.request.header.Content-Type': true,
+          'method.request.header.X-Api-Key': true,
+        },
+        methodResponses: [
+          {
+            statusCode: '200',
+            responseParameters: {
+              'method.response.header.Access-Control-Allow-Origin': true,
+            },
+          },
+        ],
+      });
+    }
 
     // Add a catch-all proxy resource for any other paths
     // This uses the {proxy+} pattern correctly
