@@ -53,7 +53,7 @@ export class S3Stack extends Stack {
 
     // Input Bucket
     this.filesBucket = new Bucket(this, getCdkConstructId({ resourceName: 'files-bucket' }, this), {
-      bucketName: getCdkConstructId({ resourceName: 'files-bucket' }, this),
+      bucketName: getCdkConstructId({ resourceName: 'files-bucket-v2' }, this),
       cors: [corsRule],
       removalPolicy: this.removalPolicy,
       encryption: BucketEncryption.KMS,

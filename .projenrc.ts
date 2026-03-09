@@ -22,6 +22,7 @@ const project = new awscdk.AwsCdkTypeScriptApp({
     '@aws-sdk/lib-dynamodb',
     '@aws-sdk/util-dynamodb',
     '@aws-sdk/s3-request-presigner',
+    '@aws-sdk/client-bedrock-runtime',
     'aws-sdk',
     'dotenv',
     'cdk-nag',
@@ -93,7 +94,7 @@ const project = new awscdk.AwsCdkTypeScriptApp({
     '*.tsbuildinfo',
     '.idea',
     '!src/lib/',
-    'local-docs/'
+    'local-docs/',
   ],
 
   // Sample code generation
